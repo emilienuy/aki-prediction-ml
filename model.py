@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-
 import argparse
 import csv
 from datetime import datetime
 import math
+import os
 
 import numpy as np
 import pandas as pd
 
-
-# training_filepath = "/data/training.csv"
-# TODO:
-training_filepath = "training.csv"
-test_filepath = "test.csv"
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import fbeta_score
 
 
 def extract_creatinine_history(patient_record: dict):
@@ -176,38 +174,112 @@ def load_features(records_filepath, has_label):
                 y.append(1 if row["aki"] == "y" else 0)
 
     X = pd.DataFrame(X_rows)
-    X = X.replace([math.inf, -math.inf], np.nan)
-    X = X.fillna(X.median(numeric_only=True))
     return (X, pd.Series(y)) if has_label else X
 
 
-def AkiModel():
-    pass
+class AkiModel:
+    """
+    Simple AKI classifier using logistic regression.
+
+    Uses median imputation and a fixed probability threshold for converting
+    probabilities into binary predictions.
+    """
+
+    def __init__(self, threshold: float = 0.5):
+        self.threshold = threshold
+        self.imputer = SimpleImputer(strategy="median")
+        self.clf = LogisticRegression(
+            max_iter=1000,
+            class_weight="balanced",  # helps recall (important for F3)
+            solver="lbfgs",
+        )
+        self.feature_columns = None
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> "AkiModel":
+        # Keep a stable column order between train/test
+        self.feature_columns = list(X.columns)
+
+        X = X.reindex(columns=self.feature_columns)
+        X = X.replace([math.inf, -math.inf], np.nan)
+        X_imp = self.imputer.fit_transform(X)
+
+        self.clf.fit(X_imp, y)
+        return self
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        if self.feature_columns is None:
+            raise RuntimeError("Model has not been fitted yet.")
+
+        # Ensure same columns/order as training (fill missing with NaN -> imputer handles it)
+        X = X.reindex(columns=self.feature_columns, fill_value=np.nan)
+        X = X.replace([math.inf, -math.inf], np.nan)
+        X_imp = self.imputer.transform(X)
+
+        probs = self.clf.predict_proba(X_imp)[:, 1]
+        return (probs >= self.threshold).astype(int)
+
+
+def csv_has_column(filepath: str, column: str) -> bool:
+    with open(filepath, newline="") as f:
+        reader = csv.reader(f)
+        header = next(reader)
+    return column in header
 
 
 def main():
-    X_train, y_train = load_features(training_filepath, has_label=True)
-    model = AkiModel().fit(X_train, y_train)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", default="test.csv", help="Path to input CSV (no aki column in marking).")
+    parser.add_argument("--output", default="aki.csv", help="Path to output predictions CSV.")
+    parser.add_argument(
+        "--training",
+        default=os.environ.get("TRAINING_PATH", "training.csv"),
+        help="Path to training CSV. In marking this is /data/training.csv.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="Probability threshold for predicting AKI (y).",
+    )
+    parser.add_argument(
+        "--print-metrics",
+        action="store_true",
+        help="If input has labels, print F3 score.",
+    )
+    args = parser.parse_args()
 
-    X_test = load_features(test_filepath, has_label=False)
-    pred_binary = model.predict(X_test)
-    pred_yn = np.where(pred_binary == 1, "y", "n")
-    
-    '''parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="test.csv")
-    parser.add_argument("--output", default="aki.csv")
-    flags = parser.parse_args()
+    # If we're running under the marking harness, /data/training.csv will exist.
+    training_path = args.training
+    if training_path == "training.csv" and os.path.exists("/data/training.csv"):
+        training_path = "/data/training.csv"
 
-    with open(flags.input, newline="") as f_in, open(flags.output, "w", newline="") as f_out:
-        r = csv.DictReader(f_in)
-        w = csv.writer(f_out)
+    # Train
+    X_train, y_train = load_features(training_path, has_label=True)
+    model = AkiModel(threshold=args.threshold).fit(X_train, y_train)
+
+    # Predict (input may or may not have labels)
+    input_has_aki = csv_has_column(args.input, "aki")
+    if input_has_aki:
+        X_in, y_true = load_features(args.input, has_label=True)
+    else:
+        X_in = load_features(args.input, has_label=False)
+        y_true = None
+
+    pred_binary = model.predict(X_in)
+
+    # Optional metrics (only if labels exist)
+    if args.print_metrics and y_true is not None:
+        f3 = fbeta_score(y_true, pred_binary, beta=3, zero_division=0)
+        print(f"F3 score: {f3:.4f}")
+
+    # Write predictions in required format
+    y_pred = np.where(pred_binary == 1, "y", "n")
+    with open(args.output, "w", newline="") as f:
+        w = csv.writer(f)
         w.writerow(["aki"])
+        for p in y_pred:
+            w.writerow([p])
 
-        for row in r:
-            print(row.keys())
-            # TODO: turn row into features, run model/rule
-            pred = "n"
-            w.writerow([pred])'''
 
 if __name__ == "__main__":
     main()
