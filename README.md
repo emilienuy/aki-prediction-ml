@@ -21,7 +21,7 @@ For each patient, the model extracts:
 - sex (binary encoding)
 - number of prior creatinine measurements
 - latest creatinine value
-- change relative to historical baseline (minimum (RV1) and median (RV2))
+- change relative to historical baseline (minimum and median)
 - most recent creatinine delta
 - time since previous measurement
 - variability of previous measurements (standard deviation)
@@ -67,7 +67,7 @@ containing a single aki column with values y or n.
 
 ---
 
-## Automated Verification (Engineering Quality)
+## Automated Verification
 
 The code includes an automated validation pathway to ensure correctness after changes.
 
@@ -78,7 +78,7 @@ the system:
 1. trains the model,
 2. evaluates predictions on labelled data,
 3. computes the F3 score, and
-4. fails automatically if performance drops below a 0.95 threshold.
+4. fails automatically if performance drops below an expected threshold (F3 = 0.95).
 
 ---
 
@@ -89,7 +89,8 @@ Listed in requirements.txt:
 - pandas
 - scikit-learn
 
-All dependencies are standard, widely used, and suitable for production ML systems.
+These libraries are mature, actively maintained, widely adopted in production ML systems, 
+and are commonly used in clinical and healthcare data pipelines.
 
 ---
 
